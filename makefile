@@ -1,25 +1,9 @@
-###############################################################################
-# Variables: System specific options
-###############################################################################
-# Linux image
-VMLINUX ?=
-ifeq ($(VMLINUX),)
-  ${error VMLINUX must be specified}
-endif
-DTS_FILE ?=
-ifeq ($(DTS_FILE),)
-  ${error DTS_FILE must be specified}
-endif
-LINUX_DIR ?=
-ifeq ($(LINUX_DIR),)
-  ${error LINUX_DIR must be specified (LINUX kernel source tree base)}
-endif
 
 # Toolchain path/prefix
 TOOLCHAIN_PREFIX ?= riscv32-unknown-elf-
 
 # Link kernel / dtb into ELF
-CONFIG_KERNEL_EMBEDDED ?= y
+CONFIG_KERNEL_EMBEDDED ?= n
 
 # [if KERNEL_EMBEDDED=n]
 CONFIG_DTB_SRC         ?= 0x88500000
@@ -34,12 +18,7 @@ CONFIG_KERNEL_SIZE     ?= 6500000
 ###############################################################################
 # Target name
 ELF_NAME    ?= riscv-linux-boot.elf
-
-# VMLINUX Binary
-PAYLOAD     ?= vmlinux.bin
-
-# DTB Binary
-DTB         ?= config.dtb
+BIN_NAME    ?= riscv-linux-boot.bin
 
 # Source files
 SRC_DIR      = .
@@ -77,11 +56,12 @@ else
   EXTRA_CFLAGS+= -DCONFIG_KERNEL_DST=$(CONFIG_KERNEL_DST)
   EXTRA_CFLAGS+= -DCONFIG_KERNEL_SIZE=$(CONFIG_KERNEL_SIZE)
 endif
-EXTRA_CFLAGS+= -Wno-unused-variable 
+EXTRA_CFLAGS+= -Wno-unused-variable  -march=rv32imafc_zicbom -mabi=ilp32
 
 # Options
 BASE_ADDRESS      = 0x80000000
-PLATFORM_LDFLAGS  = -nostartfiles -nodefaultlibs -nostdlib -lgcc -T./custom.ld
+PLATFORM_LDFLAGS  = -nostartfiles -nodefaultlibs -nostdlib -lgcc -T./flash.ld
+
 
 OPT        ?= 2
 CFLAGS	   := -Ttext $(BASE_ADDRESS) -O$(OPT) -g -Wall $(patsubst %,-I%,$(SRC_DIR)) $(EXTRA_CFLAGS)
@@ -106,7 +86,7 @@ OBJ    := $(foreach src,$(SRC),$(call src2obj,$(src)))
 ###############################################################################
 # Rules
 ###############################################################################
-all: $(ELF_DIR)$(ELF_NAME)
+all: $(ELF_DIR)$(ELF_NAME) $(ELF_DIR)$(BIN_NAME)
 
 $(OBJ_DIR) $(ELF_DIR):
 	@mkdir -p $@
@@ -127,10 +107,7 @@ $(ELF_DIR)$(ELF_NAME): $(OBJ) | $(ELF_DIR)
 	@echo "# LD $(notdir $@)"
 	@$(CC) $(OBJ) -o $@ $(LDFLAGS)
 
-# Kernel to binary
-$(PAYLOAD): $(VMLINUX)
-	@$(OBJCOPY) -O binary $< $@
 
-# Device tree to binary
-$(DTB): $(DTS_FILE)
-	$(LINUX_DIR)/scripts/dtc/dtc -I dts -O dtb -o $@ $<
+$(ELF_DIR)$(BIN_NAME): $(ELF_DIR)$(ELF_NAME)
+	@echo "# OBJCOPY $(notdir $@)"
+	@$(OBJCOPY) -O binary $< $@

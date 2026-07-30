@@ -4,10 +4,18 @@
 #include "emulation.h"
 #include "serial.h"
 #include "assert.h"
+#include "spi.h"
+#include "rdtime.h"
+#include "sd.h"
+#include "ff.h"
+
 
 #ifndef CONFIG_UARTLITE_BASE
-#define CONFIG_UARTLITE_BASE 0x92000000
+#define CONFIG_UART_BASE 0x10000000
 #endif
+#define CONFIG_XSPI_BASE 0x10001000
+#define CONFIG_XSPI_GPIO_BASE 0x10003000
+#undef CONFIG_KERNEL_EMBEDDED
 
 //-----------------------------------------------------------------
 // Defines:
@@ -64,6 +72,27 @@ static struct irq_context * irq_callback(struct irq_context *ctx)
     }
     return ctx;
 }
+
+static struct irq_context * illegal_handler(struct irq_context *ctx)
+{
+    uint32_t mcause;
+    uint32_t mepc;
+    uint32_t mtval;
+
+    asm volatile ("csrr %0, mcause" : "=r"(mcause));
+    asm volatile ("csrr %0, mepc"   : "=r"(mepc));
+    asm volatile ("csrr %0, mtval"  : "=r"(mtval));
+
+    serial_putstr("ILLEGAL INSTRUCTION\n");
+    serial_putstr_hex("mcause: ", mcause);
+    serial_putstr_hex("mepc:   ", mepc);
+    serial_putstr_hex("mtval:  ", mtval);
+
+    while (1);
+
+    return ctx;
+}
+
 //-----------------------------------------------------------------
 // boot_kernel:
 //-----------------------------------------------------------------
@@ -106,8 +135,9 @@ static int boot_kernel(uint32_t entry_addr, uint32_t dtb_addr)
 //-----------------------------------------------------------------
 int main(void)
 {
-    serial_init(CONFIG_UARTLITE_BASE, 0);
-
+    serial_init(CONFIG_UART_BASE, 0);
+    spi_init(CONFIG_XSPI_BASE);
+    
     serial_putstr("\n");
     serial_putstr(" _____  _____  _____  _____   __      __  _      _                    ____              _   \n");
     serial_putstr("|  __ \\|_   _|/ ____|/ ____|  \\ \\    / / | |    (_)                  |  _ \\            | |  \n");
@@ -118,7 +148,53 @@ int main(void)
     serial_putstr("\n");
 
     emulation_init();
+    exception_set_handler(CAUSE_ILLEGAL_INSTRUCTION, illegal_handler);
 
+    //Initalize FS
+    static FATFS fs;
+    static FIL file;
+    static char buffer[128];
+
+    FRESULT res;
+    UINT bytes_read;
+
+    // Mount filesystem
+    res = f_mount(&fs, "", 1);
+    if (res != FR_OK) {
+        serial_putstr_hex("Mount failed: ", res);
+        return -1;
+    }
+
+    // Open file
+    res = f_open(&file, "test.txt", FA_READ);
+    if (res != FR_OK) {
+        serial_putstr_hex("Open failed: ", res);
+        return -1;
+    }
+
+    // Read file
+    res = f_read(&file, buffer, sizeof(buffer)-1, &bytes_read);
+    if (res != FR_OK) {
+        serial_putstr_hex("Read failed: ", res);
+        f_close(&file);
+        return -1;
+    }
+
+    buffer[bytes_read] = '\0';
+
+    serial_putstr("File contents:\n");
+    serial_putstr(buffer);
+
+    // Close file
+    f_close(&file);
+
+    // Unmount
+    f_mount(NULL, "", 0);
+
+    return 0;
+
+
+/*
 #ifdef CONFIG_KERNEL_EMBEDDED
     boot_kernel((uint32_t)&_payload_start, (uint32_t)&_dtb_start);
 #else
@@ -129,5 +205,8 @@ int main(void)
     serial_putstr("Booting...\n");
     boot_kernel(CONFIG_KERNEL_DST, CONFIG_DTB_DST);
 #endif
+*/
+    //Test SPI
+
     return 0;
 } 

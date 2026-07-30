@@ -32,7 +32,7 @@ SECTIONS
     *(.ram)
     . = ALIGN (8);
     _edata = .;
-    } > sram    
+    } > flash
      
   .bss : 
   {
@@ -46,7 +46,7 @@ SECTIONS
     .   =  ALIGN(8) ;
     .   += 4096 ;
     _sp =  . - 16;
-  } > sram
+  } > ram
 
   . = ALIGN(4);
   _end = . ;

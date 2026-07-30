@@ -1,14 +1,17 @@
 #####################################################
 # Entry point
 #####################################################
-.org    0x0
+
+	.section .text
+.global _start
+_start:
 boot_vector:
 	j start
 
 #####################################################
 # ISR Vector
 #####################################################
-.org    0x20
+
 .global isr_vector
 isr_vector:
     csrrw sp, mscratch, sp
@@ -116,9 +119,9 @@ start:
     add t0, t0, %lo(isr_vector)
     csrw mtvec, t0
 
-    # t0 = _bss_start
-    lui t0,%hi(_bss_start)
-    add t0,t0,%lo(_bss_start)
+    # t0 = __bss_start
+    lui t0,%hi(__bss_start)
+    add t0,t0,%lo(__bss_start)
     
     # t1 = _end
     lui t1,%hi(_end)
@@ -137,6 +140,5 @@ bss_clear:
 #####################################################
 .global _exit
 _exit:
-    csrw 0x8b2, x0
 _exit_loop:
     jal _exit_loop
