@@ -35,6 +35,8 @@ struct irq_context *sbi_syscall(struct irq_context *ctx)
     uint32_t a2    = ctx->reg[REG_ARG0 + 2];
     uint32_t which = ctx->reg[REG_ARG0 + 7];    
 
+    //serial_putstr("SBI CALL\n");
+    
     switch (which)
     {
         case SBI_SHUTDOWN:
@@ -51,9 +53,13 @@ struct irq_context *sbi_syscall(struct irq_context *ctx)
                 ctx->reg[REG_ARG0] = -1;
             break;
         case SBI_SET_TIMER:
+            serial_putstr("Timer not setup because SBI broke FIXXXXXXXXXXXXXXXXXXX!\nExiting...");
+             _exit(-1);
+            /*
             set_mtimecmp(a0);
             csr_set(mie, SR_IP_MTIP);
             csr_clear(sip, SR_IP_STIP);
+            */
         break;
         case SBI_REMOTE_FENCE_I:
         case SBI_REMOTE_SFENCE_VMA:

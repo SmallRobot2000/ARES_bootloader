@@ -305,6 +305,35 @@ int sd_read_block_single(uint32_t lba, uint8_t *buf)
 
 }
 
+int sd_send_cmd12(uint8_t *r1)
+{
+    spi_transfer(0x40 | 12);
+    spi_transfer(0x00);
+    spi_transfer(0x00);
+    spi_transfer(0x00);
+    spi_transfer(0x00);
+    spi_transfer(0xFF);
+
+    // CMD12 has one stuff byte before R1
+    spi_transfer(0xFF);
+
+    uint8_t resp;
+    uint64_t time = time_ms();
+
+    while(time_ms() < time + 100)
+    {
+        resp = spi_transfer(0xFF);
+
+        if((resp & 0x80) == 0)
+            break;
+    }
+
+    if((resp & 0x80) != 0)
+        return -1;
+
+    *r1 = resp;
+    return 0;
+}
 int sd_read_block(uint32_t lba, uint8_t* buf, size_t block_count)
 {
     uint8_t resp;
@@ -361,7 +390,7 @@ int sd_read_block(uint32_t lba, uint8_t* buf, size_t block_count)
     }
 
     //End transfer
-    sd_send_cmd_no_sel(SD_CMD12, 0x00, 0xFF, &r1, NULL, 0x00);
+    sd_send_cmd12(&r1);
 
     if(r1 != 0x00)
     {
@@ -383,6 +412,9 @@ int sd_read_block(uint32_t lba, uint8_t* buf, size_t block_count)
         return -6;
     }
     spi_deselect();
+    spi_transfer(0xFF);
+    spi_transfer(0xFF);
+    spi_transfer(0xFF);
     spi_transfer(0xFF);
     return 0;
 

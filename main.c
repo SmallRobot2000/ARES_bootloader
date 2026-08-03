@@ -9,6 +9,9 @@
 #include "sd.h"
 #include "ff.h"
 
+//Where kernel and DTB is
+#define CONFIG_KERNEL_DST   0x90800000
+#define CONFIG_DTB_DST      0x90400000
 
 #ifndef CONFIG_UARTLITE_BASE
 #define CONFIG_UART_BASE 0x10000000
@@ -17,6 +20,7 @@
 #define CONFIG_XSPI_GPIO_BASE 0x10003000
 #undef CONFIG_KERNEL_EMBEDDED
 
+#define LOAD_SIZE 0x20000 //128K how much at a time to load form a file
 //-----------------------------------------------------------------
 // Defines:
 //-----------------------------------------------------------------
@@ -27,49 +31,25 @@
 //-----------------------------------------------------------------
 // Defines:
 //-----------------------------------------------------------------
+#define CSR_MSTATUS  0x300
+#define CSR_MIE      0x304
+#define CSR_MTVEC    0x305
+#define CSR_MEDELEG  0x302
+#define CSR_MIDELEG  0x303
+#define CSR_MIP      0x344
+#define CSR_MEPC     0x341
+#define CSR_MSCRATCH 0x340
+#define CSR_SATP     0x180
 extern uint32_t _sp;
 
-#ifdef CONFIG_KERNEL_EMBEDDED
-extern uint32_t _payload_start;
-extern uint32_t _dtb_start;
-#endif
-
-//-----------------------------------------------------------------
-// flash_memcpy: Word copy (rounded up)
-//-----------------------------------------------------------------
-static void flash_memcpy(void *dst, void *src, int length)
-{
-    int words = (length + 3) / 4;
-    uint32_t *pSrc = (uint32_t*)src;
-    uint32_t *pDst = (uint32_t*)dst;
-
-    assert(((uint32_t)pSrc & 3) == 0);
-    assert(((uint32_t)pDst & 3) == 0);
-
-    while (words--)
-        *pDst++ = *pSrc++;
-}
 //-----------------------------------------------------------------
 // irqctrl_handler: Interrupt handler
 //-----------------------------------------------------------------
-static struct irq_context * irq_callback(struct irq_context *ctx)
+static struct irq_context *irq_callback(struct irq_context *ctx)
 {
-    uint32_t cause = ctx->cause & 0xF;
-
-    if (cause == IRQ_M_TIMER)
-    {
-        emulation_take_irq();
-
-        // Raise to supervisor
-        csr_set(sip, SR_IP_STIP);
-        csr_clear(mie, SR_IP_MTIP);
-        csr_clear(mip, SR_IP_MTIP);
-    }
-    else
-    {
-        serial_putstr_hex("ERROR: Unhandled IRQ: ", cause);
-        _exit(-1);
-    }
+    serial_putstr_hex("Unexpected M-mode interrupt: ",
+                      ctx->cause & 0xF);
+    _exit(-1);
     return ctx;
 }
 
@@ -93,40 +73,110 @@ static struct irq_context * illegal_handler(struct irq_context *ctx)
     return ctx;
 }
 
+static void dump_csrs(void)
+{
+    serial_putstr("\n--- CSR dump ---\n");
+
+    serial_putstr_hex("mstatus = ", csr_read(mstatus));
+    serial_putstr_hex("mie     = ", csr_read(mie));
+    serial_putstr_hex("mip     = ", csr_read(mip));
+    serial_putstr_hex("medeleg = ", csr_read(medeleg));
+    serial_putstr_hex("mideleg = ", csr_read(mideleg));
+    serial_putstr_hex("mtvec   = ", csr_read(mtvec));
+    serial_putstr_hex("mepc    = ", csr_read(mepc));
+    serial_putstr_hex("satp    = ", csr_read(satp));
+    serial_putstr_hex("mscratch= ", csr_read(mscratch));
+}
+
+
 //-----------------------------------------------------------------
 // boot_kernel:
 //-----------------------------------------------------------------
 static int boot_kernel(uint32_t entry_addr, uint32_t dtb_addr)
 {
-    // Register fault handlers
-    exception_set_handler(CAUSE_ECALL_S, sbi_syscall);
 
-    // Register interrupt handler
+    exception_set_handler(CAUSE_ECALL_S, sbi_syscall);
+    exception_set_handler(CAUSE_ILLEGAL_INSTRUCTION, illegal_handler);
+
     exception_set_irq_handler(irq_callback);
 
-    // Enable timer IRQ (on return from exception)
-    csr_write(mie, 1 << IRQ_M_TIMER);
-    csr_write(mstatus, (PRV_S << MSTATUS_MPP_SHIFT) | SR_MPIE);
 
-    // Configure interrupt / exception delegation
-    // Delegate everything except super/machine level syscalls
-    // and machine timer IRQ
-    csr_write(medeleg, ~((1 << CAUSE_ECALL_S) |
-                         (1 << CAUSE_ILLEGAL_INSTRUCTION) |
-                         (1 << CAUSE_MISALIGNED_LOAD) |
-                         (1 << CAUSE_MISALIGNED_STORE)));
-    csr_write(mideleg, ~(1 << IRQ_M_TIMER));
+    
 
-    // Boot target
+
+    csr_write(mie, 0);
+    //csr_write(mip, 0);
+
+
+    uint32_t deleg =
+        (1 << CAUSE_ECALL_U) |
+        (1 << CAUSE_ILLEGAL_INSTRUCTION) |
+        (1 << CAUSE_MISALIGNED_LOAD) |
+        (1 << CAUSE_MISALIGNED_STORE);
+
+    csr_write(medeleg, deleg);
+    csr_write(mideleg, 0);
+
+
     csr_write(mepc, entry_addr);
 
-    // Set machine mode exception stack
+
+    //uint32_t status = csr_read(mstatus);
+
+    //serial_putstr_hex("mstatus old = ", status);
+
+
+
+
     csr_write(mscratch, &_sp);
 
-    // Switch from machine mode to supervisor mode
-    register uintptr_t a0 asm ("a0") = 0;
-    register uintptr_t a1 asm ("a1") = dtb_addr;
-    asm volatile ("mret" : : "r" (a0), "r" (a1));
+
+    //serial_putstr("\n--- Final state before mret ---\n");
+    //dump_csrs();
+
+
+    //serial_putstr("\nJumping to S-mode...\n");
+
+
+    // Important when writing code into executable RAM
+    //asm volatile("fence.i");
+
+    serial_putstr("Testing S CSRs...\n");
+
+    csr_write(sie, 0);
+    serial_putstr("sie OK\n");
+
+    csr_write(stvec, 0);
+    serial_putstr("stvec OK\n");
+
+    csr_write(sscratch, 0);
+    serial_putstr("sscratch OK\n");
+
+    csr_write(satp, 0);
+    serial_putstr("satp OK\n");
+
+    asm volatile("sfence.vma zero, zero" ::: "memory");
+    asm volatile("fence.i" ::: "memory");
+    csr_write(mepc, entry_addr);
+
+    uint32_t status = csr_read(mstatus);
+    status &= ~(3 << MSTATUS_MPP_SHIFT);
+    status |= (PRV_S << MSTATUS_MPP_SHIFT);
+    status |= SR_MPIE;
+    csr_write(mstatus, status);
+
+    asm volatile(
+        "mv a0, zero\n"
+        "mv a1, %0\n"
+        "mret\n"
+        :
+        : "r"(dtb_addr)
+        : "a0", "a1", "memory"
+    );
+
+
+
+    serial_putstr("ERROR: returned from mret\n");
 
     return 0;
 }
@@ -138,6 +188,8 @@ int main(void)
     serial_init(CONFIG_UART_BASE, 0);
     spi_init(CONFIG_XSPI_BASE);
     
+    //dump_csrs();
+
     serial_putstr("\n");
     serial_putstr(" _____  _____  _____  _____   __      __  _      _                    ____              _   \n");
     serial_putstr("|  __ \\|_   _|/ ____|/ ____|  \\ \\    / / | |    (_)                  |  _ \\            | |  \n");
@@ -147,14 +199,17 @@ int main(void)
     serial_putstr("|_|  \\_\\_____|_____/ \\_____|      \\/     |______|_|_| |_|\\__,_/_/\\_\\ |____/ \\___/ \\___/ \\__|\n");
     serial_putstr("\n");
 
+    //while(1);
     emulation_init();
     exception_set_handler(CAUSE_ILLEGAL_INSTRUCTION, illegal_handler);
+
+    serial_putstr_hex("misa = ", csr_read(misa));
 
     //Initalize FS
     static FATFS fs;
     static FIL file;
     static char buffer[128];
-
+    uint32_t file_offset = 0;
     FRESULT res;
     UINT bytes_read;
 
@@ -165,48 +220,58 @@ int main(void)
         return -1;
     }
 
+
+    serial_putstr("\nLoading tree.dtb\n");
     // Open file
-    res = f_open(&file, "test.txt", FA_READ);
+    res = f_open(&file, "tree.dtb", FA_READ);
     if (res != FR_OK) {
-        serial_putstr_hex("Open failed: ", res);
+        serial_putstr_hex("Open tree.dtb failed: ", res);
         return -1;
     }
 
-    // Read file
-    res = f_read(&file, buffer, sizeof(buffer)-1, &bytes_read);
+
+    res = f_read(&file, (uint8_t*)(CONFIG_DTB_DST), 0x10000, &bytes_read); //Max 64k
     if (res != FR_OK) {
-        serial_putstr_hex("Read failed: ", res);
+        serial_putstr_hex("Read tree.dtb failed: ", res);
         f_close(&file);
         return -1;
     }
+    serial_putstr("Done\n");
 
-    buffer[bytes_read] = '\0';
 
-    serial_putstr("File contents:\n");
-    serial_putstr(buffer);
+    serial_putstr("\nLoading image.bin\n");
+    // Open file
+    res = f_open(&file, "image.bin", FA_READ);
+    if (res != FR_OK) {
+        serial_putstr_hex("Open image.bin failed: ", res);
+        return -1;
+    }
 
+    // Read image file
+    file_offset = 0;
+    do{
+        res = f_read(&file, (uint8_t*)(CONFIG_KERNEL_DST + file_offset), LOAD_SIZE, &bytes_read);
+        file_offset += bytes_read;
+        serial_putchar('#');
+        if (res != FR_OK) {
+            serial_putstr_hex("Read image.bin failed: ", res);
+            f_close(&file);
+            return -1;
+        }
+    } while(bytes_read == LOAD_SIZE);
     // Close file
     f_close(&file);
 
+    serial_putstr("\nDone\n");
     // Unmount
     f_mount(NULL, "", 0);
 
-    return 0;
+    
 
 
-/*
-#ifdef CONFIG_KERNEL_EMBEDDED
-    boot_kernel((uint32_t)&_payload_start, (uint32_t)&_dtb_start);
-#else
-    serial_putstr("Copying DTB from FLASH to RAM...\n");
-    flash_memcpy(CONFIG_DTB_DST, CONFIG_DTB_SRC, CONFIG_DTB_SIZE);
-    serial_putstr("Copying KERNEL from FLASH to RAM...\n");
-    flash_memcpy(CONFIG_KERNEL_DST, CONFIG_KERNEL_SRC, CONFIG_KERNEL_SIZE);
+
     serial_putstr("Booting...\n");
     boot_kernel(CONFIG_KERNEL_DST, CONFIG_DTB_DST);
-#endif
-*/
-    //Test SPI
-
     return 0;
+
 } 

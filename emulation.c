@@ -388,6 +388,40 @@ static struct irq_context *trap_misaligned_st(struct irq_context *ctx)
     csr_write(mtvec, isr_vector);
     return ctx;
 }
+
+//-----------------------------------------------------------------
+// trap_breakpoint: Breakpoint exception handler
+//-----------------------------------------------------------------
+static struct irq_context *trap_breakpoint(struct irq_context *ctx)
+{
+    uint32_t mepc    = ctx->pc;
+    uint32_t mstatus = ctx->status;
+    uint32_t instr   = 0;
+
+    // Read the faulting instruction
+    if (emulation_read_word(mepc, (int32_t *)&instr))
+    {
+        // Fault reading instruction - redirect to supervisor
+        emulation_trap_to_supervisor(ctx, mepc, mstatus);
+        return ctx;
+    }
+
+    serial_putstr_hex("BREAKPOINT PC: ", mepc);
+    serial_putstr_hex("INSTRUCTION: ", instr);
+
+    // ebreak is 32-bit:
+    //
+    // 0x00100073
+    //
+    // Skip it
+    ctx->pc += 4;
+
+    // Restore default machine trap vector
+    csr_write(mtvec, isr_vector);
+
+    return ctx;
+}
+
 //-----------------------------------------------------------------
 // emulation_init: Configure emulation
 //-----------------------------------------------------------------
@@ -396,6 +430,7 @@ void emulation_init(void)
     exception_set_handler(CAUSE_ILLEGAL_INSTRUCTION, trap_invalid_inst);
     exception_set_handler(CAUSE_MISALIGNED_LOAD,     trap_misaligned_ld);
     exception_set_handler(CAUSE_MISALIGNED_STORE,    trap_misaligned_st);
+    exception_set_handler(CAUSE_BREAKPOINT,    trap_breakpoint);
 }
 //-----------------------------------------------------------------
 // emulation_take_irq: On interrupt, clear load reservation

@@ -1,0 +1,62 @@
+/dts-v1/;
+
+/ {
+    model = "ARES Risc-V system";
+    compatible = "aresrv";
+
+    #address-cells = <1>;
+    #size-cells = <1>;
+
+    chosen {
+        bootargs = "console=uart0,10000000 earlycon=sbi debug";
+	    linux,stdout-path = "uart0:10000000";
+    };
+
+
+    cpus {
+	#address-cells = <1>;
+	#size-cells = <0>;
+    timebase-frequency = <100000000>;
+	CPU0: cpu@0 {
+        device_type = "cpu";
+        reg = <0>;
+        status = "okay";
+        compatible = "riscv";
+        riscv,isa = "rv32ima";
+        mmu-type = "riscv,sv32";
+        clock-frequency = <100000000>;
+
+
+
+
+	    /*riscv,isa = "rv32imafc_sstc";
+
+	    interrupt-controller {
+	        compatible = "riscv,cpu-intc";
+	        interrupt-controller;
+	        #interrupt-cells = <1>;
+	    };
+        */
+	};
+    };
+
+    memory@90000000 {
+        device_type = "memory";
+        reg = <0x90000000 0x10000000>; /* 256 MB DDR */
+    };
+
+    soc {
+        compatible = "simple-bus";
+        #address-cells = <1>;
+        #size-cells = <1>;
+        ranges;
+
+        uart0: serial@10000000 {
+            compatible = "xlnx,xps-uartlite-1.00.a";
+            reg = <0x10000000 0x1000>;
+            clock-frequency = <100000000>;
+            current-speed = <115200>;
+            status = "okay";
+        };
+    };
+};
