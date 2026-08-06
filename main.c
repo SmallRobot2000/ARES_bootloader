@@ -9,15 +9,15 @@
 #include "sd.h"
 #include "ff.h"
 
-//Where kernel and DTB is
-#define CONFIG_KERNEL_DST   0x90800000
-#define CONFIG_DTB_DST      0x90400000
+//build/platform/generic/firmware/fw_jump.elf
+#define OPENSBI_ADDR  0x90400000
+#define KERNEL_ADDR   0x90800000
+#define DTB_ADDR      0x9f000000
 
 #ifndef CONFIG_UARTLITE_BASE
 #define CONFIG_UART_BASE 0x10000000
 #endif
 #define CONFIG_XSPI_BASE 0x10001000
-#define CONFIG_XSPI_GPIO_BASE 0x10003000
 #undef CONFIG_KERNEL_EMBEDDED
 
 #define LOAD_SIZE 0x20000 //128K how much at a time to load form a file
@@ -41,6 +41,19 @@
 #define CSR_MSCRATCH 0x340
 #define CSR_SATP     0x180
 extern uint32_t _sp;
+
+
+typedef void (*entry_fn_t)(void);
+
+
+//-----------------------------------------------------------------
+// jump_to_program: run program at known address
+//-----------------------------------------------------------------
+void jump_to_program(uintptr_t entry_address)
+{
+    entry_fn_t entry = (entry_fn_t)entry_address;
+    entry();
+}
 
 //-----------------------------------------------------------------
 // irqctrl_handler: Interrupt handler
@@ -88,6 +101,39 @@ static void dump_csrs(void)
     serial_putstr_hex("mscratch= ", csr_read(mscratch));
 }
 
+
+#define CACHE_BLOCK_SIZE 64u
+static inline void cache_flush_block(uintptr_t address)
+{
+    __asm__ volatile (
+        "cbo.flush 0(%0)"
+        :
+        : "r"(address)
+        : "memory"
+    );
+}
+
+void cache_flush_range(void *start, size_t length)
+{
+    if (length == 0)
+        return;
+
+    uintptr_t first =
+        (uintptr_t)start & ~(uintptr_t)(CACHE_BLOCK_SIZE - 1u);
+
+    uintptr_t last =
+        ((uintptr_t)start + length + CACHE_BLOCK_SIZE - 1u) &
+        ~(uintptr_t)(CACHE_BLOCK_SIZE - 1u);
+
+    for (uintptr_t p = first; p < last; p += CACHE_BLOCK_SIZE)
+        cache_flush_block(p);
+
+    /*
+     * Wait until cache writebacks are visible to subsequent
+     * memory accesses.
+     */
+    __asm__ volatile ("fence rw, rw" ::: "memory");
+}
 
 //-----------------------------------------------------------------
 // boot_kernel:
@@ -165,6 +211,9 @@ static int boot_kernel(uint32_t entry_addr, uint32_t dtb_addr)
     status |= SR_MPIE;
     csr_write(mstatus, status);
 
+    cache_flush_range((void *)entry_addr, 0x100000);
+    cache_flush_range((void *)dtb_addr, 0x100000);
+
     asm volatile(
         "mv a0, zero\n"
         "mv a1, %0\n"
@@ -180,13 +229,110 @@ static int boot_kernel(uint32_t entry_addr, uint32_t dtb_addr)
 
     return 0;
 }
+
+
+typedef uintptr_t uptr;
+
+/*
+ * Transfer control to OpenSBI.
+ *
+ * opensbi_entry:
+ *     Address where fw_jump.bin was loaded, for example 0x90000000.
+ *
+ * hart_id:
+ *     Boot hart ID, normally 0 for your single-core VexiiSoc.
+ *
+ * dtb_address:
+ *     Physical address of the loaded DTB, for example 0x9f000000.
+ */
+__attribute__((noreturn))
+void jump_to_opensbi(uptr opensbi_entry,
+                     uptr hart_id,
+                     uptr dtb_address)
+{
+    /*
+     * Keep the arguments in the registers required by the OpenSBI
+     * boot protocol.
+     */
+    register uptr reg_a0 __asm__("a0") = hart_id;
+    register uptr reg_a1 __asm__("a1") = dtb_address;
+    register uptr target __asm__("t0") = opensbi_entry;
+
+    __asm__ volatile (
+        /*
+         * Disable machine interrupts before transferring control.
+         */
+        "csrci mstatus, 8\n"
+        "csrw  mie, zero\n"
+
+        /*
+         * OpenSBI must start with address translation disabled.
+         */
+        "csrw  satp, zero\n"
+        "sfence.vma zero, zero\n"
+
+        /*
+         * Make SD-loaded data/code visible before executing it.
+         *
+         * Flush loaded ranges explicitly before calling this function
+         * when the D-cache is enabled.
+         */
+        "fence rw, rw\n"
+        "fence.i\n"
+
+        /*
+         * Jump without modifying ra.
+         */
+        "jr %[entry]\n"
+        :
+        : [entry] "r" (target),
+          "r" (reg_a0),
+          "r" (reg_a1)
+        : "memory"
+    );
+
+    __builtin_unreachable();
+}
+
+
+/*
+    Load a file form SD to memory
+*/
+int load_from_sd(const char *name, void *addr)
+{
+    int res;
+    static FIL file;
+    UINT bytes_read;
+    UINT file_offset = 0;
+    res = f_open(&file, name, FA_READ);
+    if (res != FR_OK) {
+        serial_putstr_hex("Opening file failed: ", res);
+        return -1;
+    }
+
+
+    do{
+        res = f_read(&file, (uint8_t*)(addr + file_offset), LOAD_SIZE, &bytes_read);
+        file_offset += bytes_read;
+        serial_putchar('#');
+        if (res != FR_OK) {
+            serial_putstr_hex("Reading file failed: ", res);
+            f_close(&file);
+            return -1;
+        }
+    } while(bytes_read == LOAD_SIZE);
+
+    f_close(&file);
+
+    return 0;
+}
 //-----------------------------------------------------------------
 // main:
 //-----------------------------------------------------------------
 int main(void)
 {
     serial_init(CONFIG_UART_BASE, 0);
-    spi_init(CONFIG_XSPI_BASE);
+    
     
     //dump_csrs();
 
@@ -199,6 +345,7 @@ int main(void)
     serial_putstr("|_|  \\_\\_____|_____/ \\_____|      \\/     |______|_|_| |_|\\__,_/_/\\_\\ |____/ \\___/ \\___/ \\__|\n");
     serial_putstr("\n");
 
+    spi_init(CONFIG_XSPI_BASE);
     //while(1);
     emulation_init();
     exception_set_handler(CAUSE_ILLEGAL_INSTRUCTION, illegal_handler);
@@ -221,57 +368,30 @@ int main(void)
     }
 
 
-    serial_putstr("\nLoading tree.dtb\n");
-    // Open file
-    res = f_open(&file, "tree.dtb", FA_READ);
-    if (res != FR_OK) {
-        serial_putstr_hex("Open tree.dtb failed: ", res);
-        return -1;
-    }
-
-
-    res = f_read(&file, (uint8_t*)(CONFIG_DTB_DST), 0x10000, &bytes_read); //Max 64k
-    if (res != FR_OK) {
-        serial_putstr_hex("Read tree.dtb failed: ", res);
-        f_close(&file);
-        return -1;
-    }
-    serial_putstr("Done\n");
-
-
     serial_putstr("\nLoading image.bin\n");
-    // Open file
-    res = f_open(&file, "image.bin", FA_READ);
-    if (res != FR_OK) {
-        serial_putstr_hex("Open image.bin failed: ", res);
+    if(load_from_sd("image.bin", (void*)KERNEL_ADDR))
+    {
         return -1;
     }
 
-    // Read image file
-    file_offset = 0;
-    do{
-        res = f_read(&file, (uint8_t*)(CONFIG_KERNEL_DST + file_offset), LOAD_SIZE, &bytes_read);
-        file_offset += bytes_read;
-        serial_putchar('#');
-        if (res != FR_OK) {
-            serial_putstr_hex("Read image.bin failed: ", res);
-            f_close(&file);
-            return -1;
-        }
-    } while(bytes_read == LOAD_SIZE);
-    // Close file
-    f_close(&file);
+    serial_putstr("\nLoading tree.dtb\n");
+    if(load_from_sd("tree.dtb", (void*)DTB_ADDR))
+    {
+        return -1;
+    }
 
-    serial_putstr("\nDone\n");
+    serial_putstr("\nLoading fw_jump.bin\n");
+    if(load_from_sd("fw_jump.bin", (void*)OPENSBI_ADDR))
+    {
+        return -1;
+    }
+
     // Unmount
     f_mount(NULL, "", 0);
 
-    
-
-
-
     serial_putstr("Booting...\n");
-    boot_kernel(CONFIG_KERNEL_DST, CONFIG_DTB_DST);
+    jump_to_opensbi(OPENSBI_ADDR, 0, DTB_ADDR);
+
     return 0;
 
 } 

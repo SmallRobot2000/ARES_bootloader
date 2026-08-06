@@ -55,9 +55,11 @@ static volatile uint32_t *m_uart;
 //-----------------------------------------------------------------
 void serial_init(uint32_t base_addr, uint32_t baud_rate)           
 {
+    
     uint32_t cfg = 0;
     m_uart = (volatile uint32_t *)base_addr;
-
+    m_uart[ULITE_TX/4] = 'B';
+    
     // Soft reset
     cfg += (1 << ULITE_CONTROL_RST_RX_SHIFT);
     cfg += (1 << ULITE_CONTROL_RST_TX_SHIFT);

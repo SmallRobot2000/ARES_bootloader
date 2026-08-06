@@ -1,6 +1,18 @@
+###############################################################################
+# Toolchain and target architecture
+###############################################################################
 
-# Toolchain path/prefix
-TOOLCHAIN_PREFIX ?= riscv32-unknown-elf-
+TOOLCHAIN_PREFIX ?= riscv64-unknown-elf-
+
+RISCV_ARCH ?= rv32imafc_zifencei_zicbom
+RISCV_ABI  ?= ilp32
+
+LIBC_SPECS ?= --specs=picolibc.specs
+
+EXTRA_CFLAGS += \
+	-Wno-unused-variable \
+	-march=$(RISCV_ARCH) \
+	-mabi=$(RISCV_ABI)
 
 # Link kernel / dtb into ELF
 CONFIG_KERNEL_EMBEDDED ?= n
@@ -47,11 +59,19 @@ EXTRA_CFLAGS+= -Wno-unused-variable -march=rv32imafc_zifencei_zicbom -mabi=ilp32
 
 # Options
 BASE_ADDRESS      = 0x80000000
-PLATFORM_LDFLAGS  = -nostartfiles -nodefaultlibs -nostdlib -lgcc -T./flash.ld
+PLATFORM_LDFLAGS  = -nostartfiles -nodefaultlibs -nostdlib -lgcc -T./flash.ld -march=$(RISCV_ARCH) \
+	-mabi=$(RISCV_ABI) \
+	-mcmodel=medany
 
 
 OPT        ?= 2
-CFLAGS	   := -Ttext $(BASE_ADDRESS) -O$(OPT) -g -Wall $(patsubst %,-I%,$(SRC_DIR)) $(EXTRA_CFLAGS)
+CFLAGS := $(LIBC_SPECS) \
+          -Ttext $(BASE_ADDRESS) \
+          -O$(OPT) \
+          -g \
+          -Wall \
+          $(patsubst %,-I%,$(SRC_DIR)) \
+          $(EXTRA_CFLAGS)
 ASFLAGS    := 
 LDFLAGS    := $(PLATFORM_LDFLAGS) -Wl,--defsym=BASE_ADDRESS=$(BASE_ADDRESS)
 
