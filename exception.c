@@ -133,24 +133,19 @@ struct irq_context * exception_handler(struct irq_context *ctx)
 
             serial_putstr_hex("ERROR: Unhandled exception: ", ctx->cause);
             serial_putstr_hex("       at PC: ", ctx->pc);
-            if(ctx->cause == 0x0C)
-            {
-                int32_t va = csr_read(mepc);
-                uint32_t satp = csr_read(satp);
+            
+            int32_t va = csr_read(mepc);
+            uint32_t satp = csr_read(satp);
 
-                serial_putstr_hex("MCAUSE", csr_read(mcause));
-                serial_putstr_hex("MEPC", csr_read(mepc));
-                serial_putstr_hex("MTVAL", csr_read(mtval));
-                serial_putstr_hex("MTVEC", csr_read(mtvec));
-                serial_putstr_hex("MSTATUS", csr_read(mstatus));
+            serial_putstr_hex("MCAUSE", csr_read(mcause));
+            serial_putstr_hex("MEPC", csr_read(mepc));
+            serial_putstr_hex("MTVAL", csr_read(mtval));
+            serial_putstr_hex("MTVEC", csr_read(mtvec));
+            serial_putstr_hex("MSTATUS", csr_read(mstatus));
 
-                serial_putstr_hex("FAULT VA: ", va);
-                serial_putstr_hex("SATP: ", satp);
-
-
-                dump_sv32_translation(csr_read(mtval));
-                dump_sv32_translation(0xc0000088);
-            }
+            serial_putstr_hex("FAULT VA: ", va);
+            serial_putstr_hex("SATP: ", satp);
+            
             assert(!"Unhandled exception");
         }
     }

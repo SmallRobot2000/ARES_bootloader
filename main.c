@@ -8,11 +8,11 @@
 #include "rdtime.h"
 #include "sd.h"
 #include "ff.h"
-
+#include "VDP.h"
 //build/platform/generic/firmware/fw_jump.elf
 #define OPENSBI_ADDR  0x90400000
 #define KERNEL_ADDR   0x90800000
-#define DTB_ADDR      0x9f000000
+#define DTB_ADDR      0x903f0000
 
 #ifndef CONFIG_UARTLITE_BASE
 #define CONFIG_UART_BASE 0x10000000
@@ -42,6 +42,7 @@
 #define CSR_SATP     0x180
 extern uint32_t _sp;
 
+extern void keyboard_test(void);
 
 typedef void (*entry_fn_t)(void);
 
@@ -326,6 +327,7 @@ int load_from_sd(const char *name, void *addr)
 
     return 0;
 }
+
 //-----------------------------------------------------------------
 // main:
 //-----------------------------------------------------------------
@@ -345,12 +347,15 @@ int main(void)
     serial_putstr("|_|  \\_\\_____|_____/ \\_____|      \\/     |______|_|_| |_|\\__,_/_/\\_\\ |____/ \\___/ \\___/ \\__|\n");
     serial_putstr("\n");
 
+    //keyboard_test();
+
     spi_init(CONFIG_XSPI_BASE);
     //while(1);
     emulation_init();
     exception_set_handler(CAUSE_ILLEGAL_INSTRUCTION, illegal_handler);
 
     serial_putstr_hex("misa = ", csr_read(misa));
+
 
     //Initalize FS
     static FATFS fs;
@@ -360,6 +365,7 @@ int main(void)
     FRESULT res;
     UINT bytes_read;
 
+
     // Mount filesystem
     res = f_mount(&fs, "", 1);
     if (res != FR_OK) {
@@ -367,6 +373,7 @@ int main(void)
         return -1;
     }
 
+    VDP_test();
 
     serial_putstr("\nLoading image.bin\n");
     if(load_from_sd("image.bin", (void*)KERNEL_ADDR))
